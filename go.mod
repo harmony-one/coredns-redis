@@ -1,4 +1,4 @@
-module github.com/rverst/coredns-redis
+module github.com/polymorpher/coredns-redis
 
 go 1.18
 

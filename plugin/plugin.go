@@ -8,8 +8,8 @@ import (
 	"github.com/coredns/coredns/request"
 	redisCon "github.com/gomodule/redigo/redis"
 	"github.com/miekg/dns"
-	redis "github.com/rverst/coredns-redis"
-	"github.com/rverst/coredns-redis/record"
+	redis "github.com/polymorpher/coredns-redis"
+	"github.com/polymorpher/coredns-redis/record"
 	"sort"
 	"sync"
 	"time"
@@ -102,7 +102,11 @@ func (p *Plugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 	case dns.TypeSOA:
 		answers, extras = p.Redis.SOA(zone, zoneRecords)
 	case dns.TypeA:
-		answers, extras = p.Redis.A(qName, zone, zoneRecords)
+		if len(zoneRecords.A) == 0 && len(zoneRecords.CNAME) > 0 {
+			answers, extras = p.Redis.CNAME(qName, zone, zoneRecords)
+		} else {
+			answers, extras = p.Redis.A(qName, zone, zoneRecords)
+		}
 	case dns.TypeAAAA:
 		answers, extras = p.Redis.AAAA(qName, zone, zoneRecords)
 	case dns.TypeCNAME:
