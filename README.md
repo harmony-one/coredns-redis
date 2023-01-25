@@ -1,221 +1,82 @@
-*redis* enables reading zone data from redis database.
-this plugin should be located right next to *etcd* in *plugins.cfg*
+# coredns-redis
 
-## syntax
+*coredns-redis* uses [redis](https://redis.io/) as a backend for [coredns](https://coredns.io)  
+this plugin should be located right next to *etcd* in *plugins.cfg*:  
 
-~~~
-redis
-~~~
+```
+...
+secondary:secondary
+etcd:etcd
+redis:github.com/rverst/coredns-redis/plugin
+loop:loop
+forward:forward
+grpc:grpc
+...
+```
 
-redis loads authoritative zones from redis server
+## configuration
 
-Address will default to local redis server (localhost:6379)
-~~~
-redis {
-    address ADDR
-    password PWD
+```
+{
+  redis {
+    address HOST:PORT
+    username USER
+    password PASSWORD
+    connect_timeout TIME_MS
+    read_timeout TIME_MS
+    ttl TIME_S
     prefix PREFIX
     suffix SUFFIX
-    connect_timeout TIMEOUT
-    read_timeout TIMEOUT
-    ttl TTL
+  }
 }
-~~~
+```
 
-* `address` is redis server address to connect in the form of *host:port* or *ip:port*.
-* `password` is redis server *auth* key
-* `connect_timeout` time in ms to wait for redis server to connect
-* `read_timeout` time in ms to wait for redis server to respond
-* `ttl` default ttl for dns records, 300 if not provided
-* `prefix` add PREFIX to all redis keys
-* `suffix` add SUFFIX to all redis keys
+- `address` is the address of the redis backend in form of *host:port* (defaults to `localhost:6379`)
+- `username` is the username for connectiong to the redis backend (optional)
+- `password` is the redis password (optional)
+- `connect_timeout` maximum time to establish a connection to the redis backend (in ms, optional)
+- `read_timeout` maximum time to wait for the redis backend to respond (in ms, optional)
+- `ttl` default ttl for dns records which have no ttl set (in seconds, default 3600)
+- `prefix` a prefix added to all redis keys
+- `suffix` a suffix added to all redis keys
 
-## examples
+### example
 
-~~~ corefile
-. {
-    redis example.com {
-        address localhost:6379
-        password foobared
-        connect_timeout 100
-        read_timeout 100
-        ttl 360
-        prefix _dns:
+corefile:
+```
+{
+  .{
+    redis {
+      address localhost:6379
+      username redis_user
+      password super_secret
+      connect_timeout 2000
+      read_timeout 2000
+      ttl 300
+      prefix DNS_
+      suffix _DNS
     }
+  }
 }
-~~~
+```
 
 ## reverse zones
 
-reverse zones is not supported yet
+not yet supported
+
 
 ## proxy
 
-proxy is not supported yet
+not yet supported
 
-## zone format in redis db
+## API
 
-### zones
+Package `redis` provides functions to manipulate (get, add, edit, delete) the data in the redis backend.
+The DNS zones are saved as hashmaps with the zone-name as key in the backend.
+While the data format is JSON at the moment, but I am considering switching to 
+*protobuf* for performance reasons later. 
 
-each zone is stored in redis as a hash map with *zone* as key
+## credits
 
-~~~
-redis-cli>KEYS *
-1) "example.com."
-2) "example.net."
-redis-cli>
-~~~
+this plugin started as a fork of [github.com/arvancloud/redis](https://github.com/arvancloud/redis).
 
-### dns RRs 
-
-dns RRs are stored in redis as json strings inside a hash map using address as field key.
-*@* is used for zone's own RR values.
-
-#### A
-
-~~~json
-{
-    "a":{
-        "ip" : "1.2.3.4",
-        "ttl" : 360
-    }
-}
-~~~
-
-#### AAAA
-
-~~~json
-{
-    "aaaa":{
-        "ip" : "::1",
-        "ttl" : 360
-    }
-}
-~~~
-
-#### CNAME
-
-~~~json
-{
-    "cname":{
-        "host" : "x.example.com.",
-        "ttl" : 360
-    }
-}
-~~~
-
-#### TXT
-
-~~~json
-{
-    "txt":{
-        "text" : "this is a text",
-        "ttl" : 360
-    }
-}
-~~~
-
-#### NS
-
-~~~json
-{
-    "ns":{
-        "host" : "ns1.example.com.",
-        "ttl" : 360
-    }
-}
-~~~
-
-#### MX
-
-~~~json
-{
-    "mx":{
-        "host" : "mx1.example.com",
-        "priority" : 10,
-        "ttl" : 360
-    }
-}
-~~~
-
-#### SRV
-
-~~~json
-{
-    "srv":{
-        "host" : "sip.example.com.",
-        "port" : 555,
-        "priority" : 10,
-        "weight" : 100,
-        "ttl" : 360
-    }
-}
-~~~
-
-#### SOA
-
-~~~json
-{
-    "soa":{
-        "ttl" : 100,
-        "mbox" : "hostmaster.example.com.",
-        "ns" : "ns1.example.com.",
-        "refresh" : 44,
-        "retry" : 55,
-        "expire" : 66
-    }
-}
-~~~
-
-#### CAA
-
-~~~json
-{
-    "caa":{
-        "flag" : 0,
-        "tag" : "issue",
-        "value" : "letsencrypt.org"
-    }
-}
-~~~
-
-#### example
-
-~~~
-$ORIGIN example.net.
- example.net.                 300 IN  SOA   <SOA RDATA>
- example.net.                 300     NS    ns1.example.net.
- example.net.                 300     NS    ns2.example.net.
- *.example.net.               300     TXT   "this is a wildcard"
- *.example.net.               300     MX    10 host1.example.net.
- sub.*.example.net.           300     TXT   "this is not a wildcard"
- host1.example.net.           300     A     5.5.5.5
- _ssh.tcp.host1.example.net.  300     SRV   <SRV RDATA>
- _ssh.tcp.host2.example.net.  300     SRV   <SRV RDATA>
- subdel.example.net.          300     NS    ns1.subdel.example.net.
- subdel.example.net.          300     NS    ns2.subdel.example.net.
- host2.example.net                    CAA   0 issue "letsencrypt.org"
-~~~
-
-above zone data should be stored at redis as follow:
-
-~~~
-redis-cli> hgetall example.net.
- 1) "_ssh._tcp.host1"
- 2) "{\"srv\":[{\"ttl\":300, \"target\":\"tcp.example.com.\",\"port\":123,\"priority\":10,\"weight\":100}]}"
- 3) "*"
- 4) "{\"txt\":[{\"ttl\":300, \"text\":\"this is a wildcard\"}],\"mx\":[{\"ttl\":300, \"host\":\"host1.example.net.\",\"preference\": 10}]}"
- 5) "host1"
- 6) "{\"a\":[{\"ttl\":300, \"ip\":\"5.5.5.5\"}]}"
- 7) "sub.*"
- 8) "{\"txt\":[{\"ttl\":300, \"text\":\"this is not a wildcard\"}]}"
- 9) "_ssh._tcp.host2"
-10) "{\"srv\":[{\"ttl\":300, \"target\":\"tcp.example.com.\",\"port\":123,\"priority\":10,\"weight\":100}]}"
-11) "subdel"
-12) "{\"ns\":[{\"ttl\":300, \"host\":\"ns1.subdel.example.net.\"},{\"ttl\":300, \"host\":\"ns2.subdel.example.net.\"}]}"
-13) "@"
-14) "{\"soa\":{\"ttl\":300, \"minttl\":100, \"mbox\":\"hostmaster.example.net.\",\"ns\":\"ns1.example.net.\",\"refresh\":44,\"retry\":55,\"expire\":66},\"ns\":[{\"ttl\":300, \"host\":\"ns1.example.net.\"},{\"ttl\":300, \"host\":\"ns2.example.net.\"}]}"
-15) "host2"
-16)"{\"caa\":[{\"flag\":0, \"tag\":\"issue\", \"value\":\"letsencrypt.org\"}]}"
-redis-cli>
-~~~
