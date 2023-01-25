@@ -69,7 +69,7 @@ func (p *Plugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 
 	if zoneName == "" {
 		log.Debugf("zone not found: %s", qName)
-		p.checkCache();
+		p.checkCache()
 		return plugin.NextOrFailure(qName, p.Next, ctx, w, r)
 	} else if conn == nil {
 		conn = p.Redis.Pool.Get()
@@ -202,7 +202,7 @@ func (p *Plugin) loadCache() error {
 }
 
 func (p *Plugin) checkCache() {
-	if time.Now().Sub(p.lastRefresh).Seconds() > float64(p.Redis.DefaultTtl * 2) {
+	if time.Now().Sub(p.lastRefresh).Seconds() > float64(p.Redis.DefaultTtl*2) {
 		p.startZoneNameCache()
 	}
 }
