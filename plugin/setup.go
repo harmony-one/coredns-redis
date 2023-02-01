@@ -5,6 +5,7 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/pkg/upstream"
 	"github.com/polymorpher/coredns-redis"
 	"strconv"
 	"time"
@@ -32,6 +33,7 @@ func setup(c *caddy.Controller) error {
 	p := &Plugin{
 		Redis:          r,
 		loadZoneTicker: time.NewTicker(time.Duration(r.DefaultTtl) * time.Second),
+		Upstream:       upstream.New(),
 	}
 	p.startZoneNameCache()
 

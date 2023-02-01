@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/coredns/coredns/plugin"
 	clog "github.com/coredns/coredns/plugin/pkg/log"
+	"github.com/coredns/coredns/plugin/pkg/upstream"
 	"github.com/coredns/coredns/request"
 	redisCon "github.com/gomodule/redigo/redis"
 	"github.com/miekg/dns"
@@ -14,6 +15,31 @@ import (
 	"sync"
 	"time"
 )
+
+type Result int
+
+const (
+	// Success is a successful lookup.
+	Success Result = iota
+	// NameError indicates a nameerror
+	NameError
+	// Delegation indicates the lookup resulted in a delegation.
+	Delegation
+	// NoData indicates the lookup resulted in a NODATA.
+	NoData
+	// ServerFailure indicates a server failure during the lookup.
+	ServerFailure
+)
+
+func (r Result) toRcode() int {
+	if r == NameError {
+		return dns.RcodeNameError
+	}
+	if r == ServerFailure {
+		return dns.RcodeServerFailure
+	}
+	return dns.RcodeSuccess
+}
 
 const name = "redis"
 
@@ -27,6 +53,8 @@ type Plugin struct {
 	zones          []string
 	lastRefresh    time.Time
 	lock           sync.Mutex
+	// Upstream for looking up external names during the resolution process.
+	Upstream *upstream.Upstream
 }
 
 func (p *Plugin) Name() string {
@@ -39,6 +67,26 @@ func (p *Plugin) Ready() bool {
 		log.Error(err)
 	}
 	return ok
+}
+
+func (p *Plugin) externalLookup(ctx context.Context, state request.Request, target string, qtype uint16) ([]dns.RR, Result) {
+	m, e := p.Upstream.Lookup(ctx, state, target, qtype)
+	if e != nil {
+		return nil, ServerFailure
+	}
+	if m == nil {
+		return nil, Success
+	}
+	if m.Rcode == dns.RcodeNameError {
+		return m.Answer, NameError
+	}
+	if m.Rcode == dns.RcodeServerFailure {
+		return m.Answer, ServerFailure
+	}
+	if m.Rcode == dns.RcodeSuccess && len(m.Answer) == 0 {
+		return m.Answer, NoData
+	}
+	return m.Answer, Success
 }
 
 func (p *Plugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -98,34 +146,45 @@ func (p *Plugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 	zoneRecords := p.Redis.LoadZoneRecordsC(location, zone, conn)
 	zoneRecords.MakeFqdn(zone.Name)
 
-	switch qType {
-	case dns.TypeSOA:
-		answers, extras = p.Redis.SOA(zone, zoneRecords)
-	case dns.TypeA:
-		if len(zoneRecords.A) == 0 && len(zoneRecords.CNAME) > 0 {
-			answers, extras = p.Redis.CNAME(qName, zone, zoneRecords)
-		} else {
-			answers, extras = p.Redis.A(qName, zone, zoneRecords)
-		}
-	case dns.TypeAAAA:
-		answers, extras = p.Redis.AAAA(qName, zone, zoneRecords)
-	case dns.TypeCNAME:
-		answers, extras = p.Redis.CNAME(qName, zone, zoneRecords)
-	case dns.TypeTXT:
-		answers, extras = p.Redis.TXT(qName, zone, zoneRecords)
-	case dns.TypeNS:
-		answers, extras = p.Redis.NS(qName, zone, zoneRecords, p.zones, conn)
-	case dns.TypeMX:
-		answers, extras = p.Redis.MX(qName, zone, zoneRecords, p.zones, conn)
-	case dns.TypeSRV:
-		answers, extras = p.Redis.SRV(qName, zone, zoneRecords, p.zones, conn)
-	case dns.TypePTR:
-		answers, extras = p.Redis.PTR(qName, zone, zoneRecords, p.zones, conn)
-	case dns.TypeCAA:
-		answers, extras = p.Redis.CAA(qName, zone, zoneRecords)
+	answerCode := dns.RcodeSuccess
 
-	default:
-		return p.Redis.ErrorResponse(state, zoneName, dns.RcodeNotImplemented, nil)
+	if qType != dns.TypeCNAME && len(zoneRecords.CNAME) > 0 {
+		answers, extras = p.Redis.CNAME(qName, zone, zoneRecords)
+		targetName := answers[0].(*dns.CNAME).Target
+		log.Debugf("Doing external (%s) recursive CNAME lookup for %s in zone %s", targetName, qName, zone)
+		rr, result := p.externalLookup(ctx, state, targetName, qType)
+		// note that we should still write an answer even if external lookup fails, but we should propagate external lookup errors back to answer as well
+		if result != Success {
+			log.Debugf("External lookup failed for name %s in zone %s", qName, zone)
+		}
+		answerCode = result.toRcode()
+		answers = append(answers, rr...)
+	} else {
+		switch qType {
+		case dns.TypeSOA:
+			answers, extras = p.Redis.SOA(zone, zoneRecords)
+		case dns.TypeA:
+			answers, extras = p.Redis.A(qName, zone, zoneRecords)
+		case dns.TypeAAAA:
+			answers, extras = p.Redis.AAAA(qName, zone, zoneRecords)
+		case dns.TypeCNAME:
+			answers, extras = p.Redis.CNAME(qName, zone, zoneRecords)
+		case dns.TypeTXT:
+			answers, extras = p.Redis.TXT(qName, zone, zoneRecords)
+		case dns.TypeNS:
+			answers, extras = p.Redis.NS(qName, zone, zoneRecords, p.zones, conn)
+		case dns.TypeMX:
+			answers, extras = p.Redis.MX(qName, zone, zoneRecords, p.zones, conn)
+		case dns.TypeSRV:
+			answers, extras = p.Redis.SRV(qName, zone, zoneRecords, p.zones, conn)
+		case dns.TypePTR:
+			answers, extras = p.Redis.PTR(qName, zone, zoneRecords, p.zones, conn)
+		case dns.TypeCAA:
+			answers, extras = p.Redis.CAA(qName, zone, zoneRecords)
+
+		default:
+			return p.Redis.ErrorResponse(state, zoneName, dns.RcodeNotImplemented, nil)
+		}
 	}
 
 	m := new(dns.Msg)
@@ -136,7 +195,7 @@ func (p *Plugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 	state.SizeAndDo(m)
 	m = state.Scrub(m)
 	_ = w.WriteMsg(m)
-	return dns.RcodeSuccess, nil
+	return answerCode, nil
 }
 
 func (p *Plugin) handleZoneTransfer(zone *record.Zone, zones []string, w dns.ResponseWriter, r *dns.Msg, conn redisCon.Conn) (int, error) {
