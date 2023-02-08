@@ -28,6 +28,7 @@ type Redis struct {
 	keyPrefix      string
 	keySuffix      string
 	DefaultTtl     int
+	ReloadHttpPort int
 }
 
 func New() *Redis {
@@ -39,8 +40,12 @@ func (redis *Redis) SetAddress(a string) {
 	redis.address = a
 }
 
+func (redis *Redis) SetHttpPort(p int) {
+	redis.ReloadHttpPort = p
+}
+
 // SetUsername sets the username for the redis connection (optional)
-func (redis Redis) SetUsername(u string) {
+func (redis *Redis) SetUsername(u string) {
 	redis.username = u
 }
 
@@ -644,6 +649,17 @@ func (redis *Redis) LoadZoneNamesC(name string, conn redisCon.Conn) ([]string, e
 		zones[i] = strings.TrimSuffix(zones[i], redis.keySuffix)
 	}
 	return zones, nil, true
+}
+
+func (redis *Redis) CheckZoneName(zoneName string) (bool, error) {
+	conn := redis.Pool.Get()
+	defer conn.Close()
+	reply, err0 := conn.Do("EXISTS", redis.keyPrefix+zoneName+redis.keySuffix)
+	exists, err := redisCon.Int(reply, err0)
+	if err != nil {
+		return false, err
+	}
+	return exists == 1, nil
 }
 
 // Key returns the given key with prefix and suffix

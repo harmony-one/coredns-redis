@@ -264,6 +264,27 @@ func (p *Plugin) loadCache() error {
 	return nil
 }
 
+// TODO: we should use a heap for p.zones so we don't keep duplicating the slice each time this function is called
+func (p *Plugin) loadCacheForZone(fqdn string) (bool, error) {
+	exists, err := p.Redis.CheckZoneName(fqdn)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, fmt.Errorf("zone does not exist: %s", fqdn)
+	}
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	pos := sort.SearchStrings(p.zones, fqdn)
+	if p.zones[pos] == fqdn {
+		return false, nil
+	}
+	p.zones = append(p.zones, "")
+	copy(p.zones[pos+1:], p.zones[pos:])
+	p.zones[pos] = fqdn
+	return true, nil
+}
+
 func (p *Plugin) checkCache() {
 	if time.Now().Sub(p.lastRefresh).Seconds() > float64(p.Redis.DefaultTtl*2) {
 		p.startZoneNameCache()

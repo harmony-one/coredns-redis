@@ -36,6 +36,7 @@ func setup(c *caddy.Controller) error {
 		Upstream:       upstream.New(),
 	}
 	p.startZoneNameCache()
+	p.serveHttp()
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		p.Next = next
@@ -102,6 +103,14 @@ func redisParse(c *caddy.Controller) (*redis.Redis, error) {
 						r.SetDefaultTtl(redis.DefaultTtl)
 					} else {
 						r.SetDefaultTtl(t)
+					}
+				case "http_port":
+					if !c.NextArg() {
+						return redis.New(), c.ArgErr()
+					}
+					t, err := strconv.Atoi(c.Val())
+					if err == nil {
+						r.SetHttpPort(t)
 					}
 				default:
 					if c.Val() != "}" {
